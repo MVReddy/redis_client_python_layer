@@ -1,7 +1,7 @@
 import ConfigParser
 import os
 import logging
-from mass_common import mio_utils
+import utils
 
 curr_env = None
 settings_dict = {}
