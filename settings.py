@@ -45,7 +45,7 @@ def load_settings(env=None):
         curr_env = mass_redis_settings.ENV
 
     mass_redis_settings.LOG_ROOT = mass_redis_settings.cpg.get('general', 'log_root')
-    mass_redis_settings.LOG_NAME = 'mass_redis_cache.log'
+    mass_redis_settings.LOG_NAME = 'generic_redis_cache.log'
     mass_redis_settings.LOG_LEVEL = mass_redis_settings.cpg.get('general', 'log_level')
 
     mio_utils.init_log(mass_redis_settings.LOG_NAME, mass_redis_settings.LOG_ROOT)
