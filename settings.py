@@ -48,9 +48,9 @@ def load_settings(env=None):
     mass_redis_settings.LOG_NAME = 'generic_redis_cache.log'
     mass_redis_settings.LOG_LEVEL = mass_redis_settings.cpg.get('general', 'log_level')
 
-    mio_utils.init_log(mass_redis_settings.LOG_NAME, mass_redis_settings.LOG_ROOT)
+    utils.init_log(mass_redis_settings.LOG_NAME, mass_redis_settings.LOG_ROOT)
     level = logging.getLevelName(mass_redis_settings.LOG_LEVEL)
-    mio_utils.set_log_level(level, mass_redis_settings.LOG_NAME)
+    utils.set_log_level(level, mass_redis_settings.LOG_NAME)
 
     logger = logging.getLogger(mass_redis_settings.LOG_NAME)
 
