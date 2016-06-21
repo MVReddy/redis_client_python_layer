@@ -8,6 +8,7 @@ from functools import wraps
 import json
 import hashlib
 import redis
+from redis.exceptions import ConnectionError
 import logging
 import time
 import time as timer
@@ -96,7 +97,7 @@ class MyCache(redis.client.Redis):
             self.connection.ping()
             self._log.info("Able to ping Redis Server")
             return True
-        except Exception as e:
+        except ConnectionError as e:
             self._log.info("Unable to ping Redis Server: %s" % e)
             return False
 
@@ -106,18 +107,14 @@ class MyCache(redis.client.Redis):
         method in the redis client library to validate ability to contact redis.
         :return: redis.StrictRedis Connection Object
         """
-        host = kwargs.get('host', self.host)
-        port = kwargs.get('port', self.port)
-        db = kwargs.get('db', self.db)
-        password = kwargs.get('password', self.password)
         try:
-            connection = redis.StrictRedis(host=host, port=port, db=db, password=password)
+            connection = redis.StrictRedis(host=self.host, port=self.port, db=self.db, password=self.password)
             connection.ping()
-            self._log.info("Successfully connected to redis with: %s, %s" % (host, port))
+            self._log.info("Successfully connected to redis with: %s, %s" % (self.host, self.port))
             self.connection = connection
             return connection
         except redis.ConnectionError as e:
-            self._log.error("Failed to create connection to redis with: %s, %s" % (host, port))
+            self._log.error("Failed to create connection to redis with: %s, %s" % (self.host, self.port))
             self._log.error("Please check the redis connection. ERROR: %s" % e)
 
     def reconnect(self, conn_retries=None):
@@ -129,16 +126,15 @@ class MyCache(redis.client.Redis):
         if self._log:
             self._log.info('Connecting to Redis.')
         while count < conn_retries:
-            super(redis.client.Redis, self).__init__(*self.args, **self.kwargs)
+            # super(redis.client.Redis, self).__init__(*self.args, **self.kwargs)
+            connection = redis.StrictRedis(host=self.host, port=self.port, db=self.db, password=self.password)
 
-            if self.ping():
-                if self._log:
-                    self._log.info('Connected to Redis!')
+            if connection.ping():
+                self._log.info('Connected to Redis!')
                 return True
             else:
                 sl = min(3 ** count, self.max_sleep)
-                if self._log:
-                    self._log.info('Connecting failed, retrying in {0} seconds'.format(sl))
+                self._log.info('Connecting failed, retrying in {0} seconds'.format(sl))
                 time.sleep(sl)
                 count += 1
         return False
@@ -149,16 +145,15 @@ class MyCache(redis.client.Redis):
         if self._log:
             self._log.info('Connecting to Redis.')
         while True:
-            super(redis.client.Redis, self).__init__(*self.args, **self.kwargs)
+            # super(redis.client.Redis, self).__init__(*self.args, **self.kwargs)
+            connection = redis.StrictRedis(host=self.host, port=self.port, db=self.db, password=self.password)
 
-            if self.ping():
-                if self._log:
-                    self._log.info('Connected to Redis!')
+            if connection.ping():
+                self._log.info('Connected to Redis!')
                 return True
             else:
                 sl = min(3 ** count, self.max_sleep)
-                if self._log:
-                    self._log.info('Connecting failed, retrying in {0} seconds'.format(sl))
+                self._log.info('Connecting failed, retrying in {0} seconds'.format(sl))
                 time.sleep(sl)
                 count += 1
 
@@ -174,19 +169,23 @@ class MyCache(redis.client.Redis):
     def get(self, key):
         """
         Method returns value of a given key from the cache else None.
-        :param keys: List of keys to look up in Redis
-        :return: dict of found key/values
+        :param key: key to look up in Redis
+        :return: Value of the given key if it exists in cache else None
         """
         key = to_unicode(key)
         if key:  # No need to validate membership, which is an O(1) operation, but seems we can do without.
             start = timer.time()
-            value = self.connection.get(self.make_key(key))
-            if not value:  # expired key
-                self._log.info('Key - %s Not found' % key)
-                return
+            try:
+                value = self.connection.get(self.make_key(key))
+                if not value:  # expired key
+                    self._log.info('Key - %s Not found' % key)
+                    return
 
-            self._log.info("Cache took {0} to retrieve data from the Redis Server".format(float(timer.time() - start)))
-            return pickle.loads(value)
+                self._log.info("Cache took {0} to retrieve data from the Redis".format(float(timer.time() - start)))
+                return pickle.loads(value)
+            except (ConnectionError, AttributeError) as e:
+                msg = "Error while getting key - %s" % key
+                self._log.error('{} \nERROR: {}'.format(msg, str(e)))
 
     def mget(self, keys):
         """
@@ -196,18 +195,23 @@ class MyCache(redis.client.Redis):
         """
         if keys:
             cache_keys = [self.make_key(to_unicode(key)) for key in keys]
-            values = self.connection.mget(cache_keys)
-
-            return {k: pickle.loads(v) for (k, v) in zip(keys, values)}
+            try:
+                values = self.connection.mget(cache_keys)
+                return {k: pickle.loads(v) for (k, v) in zip(keys, values)}
+            except (ConnectionError, AttributeError) as e:
+                self._log.error('Error while getting multiple keys. \nERROR: {}'.format(str(e)))
 
     def keys(self):
         """
-        Returns all keys in the connection in a list
+        :return: Returns all keys in the cache as a list
         """
         start = timer.time()
-        keys = self.connection.keys()
-        self._log.info("Cache took {0} to retrieve data from the Redis Server".format(float(timer.time() - start)))
-        return keys
+        try:
+            keys = self.connection.keys()
+            self._log.info("Cache took {0} to retrieve data from the Redis Server".format(float(timer.time() - start)))
+            return keys
+        except (ConnectionError, AttributeError) as e:
+            self._log.error('Error while getting all keys in the cache. \nERROR: {}'.format(str(e)))
 
     def get_keys_json(self, keys):
         """
@@ -217,9 +221,9 @@ class MyCache(redis.client.Redis):
         :return: dict of found key/values with values parsed from JSON format
         """
         start = timer.time()
-        d = self.connection.mget(keys)
-        self._log.info("Cache took {0} to retrieve data from the Redis Server".format(float(timer.time() - start)))
+        d = self.mget(keys)
         if d:
+            self._log.info("Cache took {0} to retrieve data from the Redis Server".format(float(timer.time() - start)))
             for key, value in d.items():
                 d[key] = json.loads(value if value else None)
             return d
@@ -236,9 +240,11 @@ class MyCache(redis.client.Redis):
 
         if expire is None:
             expire = self.expire
-
-        self.connection.set(self.make_key(key), value, expire)
-        self._log.info("Successfully set %s: %s" % (key, value))
+        try:
+            self.connection.set(self.make_key(key), value, expire)
+            self._log.info("Successfully set %s: %s" % (key, value))
+        except (ConnectionError, AttributeError) as e:
+            self._log.error('Error While setting key, values \nERROR: {}'.format(str(e)))
 
     def delete(self, key):
         """
@@ -246,16 +252,26 @@ class MyCache(redis.client.Redis):
         :param key: key to remove from Redis
         """
         key = to_unicode(key)
-        self.connection.delete(self.make_key(key))
-        self._log.info("Successfully deleted key: %s" % key)
+        try:
+            self.connection.delete(self.make_key(key))
+            self._log.info("Successfully deleted key: %s" % key)
+        except (ConnectionError, AttributeError) as e:
+            self._log.error('Error while deleting key -{} \nERROR: {}'.format(key, str(e)))
 
     def delete_all(self):
         """
         Method removes (invalidates) all items from the cache.
         """
-        keys = self.connection.keys()
-        self.connection.delete(*keys)
-        self._log.info("Successfully deleted keys: %s" % keys)
+        try:
+            keys = self.connection.keys()
+            if keys:
+                self.connection.delete(*keys)
+                self._log.info("Successfully deleted keys: %s" % keys)
+                return
+
+            self._log.info("No keys found in cache")
+        except (ConnectionError, AttributeError) as e:
+            self._log.error('Error while deleting/flushing all keys. \nERROR: {}'.format(str(e)))
 
     def delete_namespace(self, space):
         """
@@ -263,38 +279,40 @@ class MyCache(redis.client.Redis):
         :param key: key to remove from Redis
         """
         namespace = self.namespace_key(space)
-        keys = list(self.connection.keys(namespace))
-        self.connection.delete(*keys)
-        self._log.info("Successfully deleted namespace: %s" % namespace)
+        try:
+            keys = list(self.connection.keys(namespace))
+            if keys:
+                self.connection.delete(keys)
+                self._log.info("Successfully deleted namespace: %s" % namespace)
+                return
 
-    def isexpired(self, key):
-        """
-        Method determines whether a given key is already expired. If not expired,
-        we expect to get back current ttl for the given key.
-        :param key: key being looked-up in Redis
-        :return: bool (True) if expired, or int representing current time-to-live (ttl) value
-        """
-        ttl = self.pttl(key)
-        if ttl == -2:  # not exist
-            ttl = self.connection.pttl(self.make_key(key))
-        elif ttl == -1:
-            return True
-        if not ttl:
-            return ttl
-        else:
-            return self.pttl("{0}:{1}".format(self.prefix, key))
+            self._log.info("No keys found in cache with namespace: %s" % namespace)
+        except (ConnectionError, AttributeError) as e:
+            self._log.error('Error while deleting namespace. \nERROR: {}'.format(str(e)))
 
     def store_json(self, key, value, expire=None):
-        self.connection.set(key, json.dumps(value), expire)
+        try:
+            self.connection.set(key, json.dumps(value), expire)
+        except (ConnectionError, AttributeError) as e:
+            self._log.error('Error while storing as  JSON. \nERROR: {}'.format(str(e)))
 
     def store_pickle(self, key, value, expire=None):
-        self.connection.set(key, pickle.dumps(value), expire)
+        try:
+            self.connection.set(key, pickle.dumps(value), expire)
+        except (ConnectionError, AttributeError) as e:
+            self._log.error('Error while doing pickling. \nERROR: {}'.format(str(e)))
 
     def get_json(self, key):
-        return json.loads(self.get_key(key))
+        try:
+            return json.loads(self.connection.get(key))
+        except (ConnectionError, AttributeError) as e:
+            self._log.error('Error while converting to JSON. \nERROR: {}'.format(str(e)))
 
     def get_pickle(self, key):
-        return pickle.loads(self.get_key(key))
+        try:
+            return pickle.loads(self.connection.get(key))
+        except (ConnectionError, AttributeError) as e:
+            self._log.error('Error while doing un-pickling. \nERROR: {}'.format(str(e)))
 
     def __contains__(self, key):
         return key in self.connection.keys()
